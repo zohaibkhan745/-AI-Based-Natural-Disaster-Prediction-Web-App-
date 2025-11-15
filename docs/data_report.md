@@ -46,8 +46,76 @@ Missing measurements are left blank by Meteostat and therefore appear as empty c
 2. From the repo root, run `python -m code.fetch_meteostat_weather --start-date YYYY-MM-DD --end-date YYYY-MM-DD --combine`.
 3. Inspect `data/raw/` for fresh CSVs and review the INFO/Warning log output for coverage issues.
 
+## NASA POWER Data Integration
+
+To address missing values in the Meteostat dataset, NASA POWER API data has been integrated as a secondary source.
+
+### Fetching NASA POWER Data
+
+```bash
+python -m code.fetch_nasa_power --combine
+```
+
+This fetches the following parameters from NASA POWER:
+- Temperature (T2M, T2M_MIN, T2M_MAX)
+- Precipitation (PRECTOTCORR)
+- Wind speed (WS2M, WS2M_MAX)
+- Humidity (RH2M) - **Not available in Meteostat**
+- Pressure (PS)
+- Solar radiation (ALLSKY_SFC_SW_DWN) - **Not available in Meteostat**
+
+### Merging Datasets
+
+The `merge_weather_data.py` script combines Meteostat and NASA POWER data:
+
+```bash
+python -m code.merge_weather_data
+```
+
+**Merge Strategy:**
+1. Meteostat data is used as the primary source
+2. Missing values in Meteostat are filled with NASA POWER data
+3. Humidity and solar radiation columns are added from NASA POWER
+
+**Results:**
+- **Before merge:** 26-28% missing values in key weather features
+- **After merge:** 0% missing values for tavg, tmin, tmax, prcp, wspd, wpgt, pres
+- **Added columns:** humidity, solar_radiation
+- **Output:** `data/processed/weather_merged.csv` (3,914 rows × 18 columns)
+
+| Column              | Missing Before | Missing After | Filled |
+| ------------------- | -------------- | ------------- | ------ |
+| tavg                | 1,047 (26.8%)  | 0 (0%)        | 100%   |
+| tmin                | 1,080 (27.6%)  | 0 (0%)        | 100%   |
+| tmax                | 1,047 (26.8%)  | 0 (0%)        | 100%   |
+| prcp                | 1,063 (27.2%)  | 0 (0%)        | 100%   |
+| wspd                | 1,109 (28.3%)  | 0 (0%)        | 100%   |
+| wpgt                | 3,914 (100%)   | 0 (0%)        | 100%   |
+| pres                | 1,115 (28.5%)  | 0 (0%)        | 100%   |
+| humidity (new)      | N/A            | 0 (0%)        | N/A    |
+| solar_radiation (new) | N/A          | 0 (0%)        | N/A    |
+
+### Final Dataset for ML
+
+The merged dataset (`data/processed/weather_merged.csv`) is ready for machine learning with:
+
+**Input Features (X):**
+- date
+- tavg, tmin, tmax (temperature in °C)
+- prcp (rainfall in mm)
+- snow (snowfall in mm - mostly missing)
+- wspd, wpgt (wind speed and gust in km/h)
+- pres (pressure in hPa)
+- humidity (relative humidity in %, from NASA)
+- solar_radiation (solar radiation in W/m², from NASA)
+- location (encoded as location_key)
+
+**Output (y) - To be added:**
+- flood_event (0/1) - Manual labeling from NDMA reports required
+
 ## Next Steps
 
+- **Label flood events:** Use NDMA reports to create flood_event target variable (1 if flood reported, 0 otherwise)
 - Pull additional Meteostat stations nearer to flood-prone tehsils if higher spatial resolution is required.
 - Enrich files with location-specific columns (e.g., district code, population) to support modeling.
-- Promote the combined dataset into `data/processed/` after QA (outlier handling, missing-value strategies, rolling aggregates, etc.).
+- Train ML model using the merged dataset with complete weather features.

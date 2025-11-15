@@ -9,3 +9,7 @@ env/
 *.sqlite3
 _build/
 /.Python
+
+# Data files (can be regenerated)
+data/raw/nasa_power_*.csv
+data/processed/
