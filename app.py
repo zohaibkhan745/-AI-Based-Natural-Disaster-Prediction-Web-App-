@@ -125,6 +125,101 @@ def fetch_weather_data(lat, lon, api_key):
     return generate_demo_weather()
 
 
+@st.cache_data(ttl=3600)
+def fetch_weather_forecast(lat, lon, api_key, target_date):
+    """Fetch weather forecast for a specific future date from OpenWeatherMap API"""
+    if api_key == "demo":
+        return generate_demo_weather_for_date(target_date), "Demo Mode (No API Key)"
+    
+    try:
+        # OpenWeatherMap 5-day/3-hour forecast API
+        url = "https://api.openweathermap.org/data/2.5/forecast"
+        params = {
+            "lat": lat,
+            "lon": lon,
+            "appid": api_key,
+            "units": "metric"
+        }
+        response = requests.get(url, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            forecasts = data.get("list", [])
+            
+            # Find forecasts for the target date
+            target_str = target_date.strftime("%Y-%m-%d")
+            day_forecasts = [f for f in forecasts if target_str in f["dt_txt"]]
+            
+            if day_forecasts:
+                # Aggregate data from all forecasts for that day
+                temps = [f["main"]["temp"] for f in day_forecasts]
+                temp_mins = [f["main"]["temp_min"] for f in day_forecasts]
+                temp_maxs = [f["main"]["temp_max"] for f in day_forecasts]
+                humidities = [f["main"]["humidity"] for f in day_forecasts]
+                pressures = [f["main"]["pressure"] for f in day_forecasts]
+                wind_speeds = [f["wind"]["speed"] * 3.6 for f in day_forecasts]  # m/s to km/h
+                
+                # Sum precipitation (rain in last 3h)
+                total_prcp = sum(f.get("rain", {}).get("3h", 0) for f in day_forecasts)
+                
+                # Get the most common weather description
+                descriptions = [f["weather"][0]["description"] for f in day_forecasts]
+                most_common_desc = max(set(descriptions), key=descriptions.count)
+                
+                return {
+                    "tavg": np.mean(temps),
+                    "tmin": min(temp_mins),
+                    "tmax": max(temp_maxs),
+                    "humidity": np.mean(humidities),
+                    "pres": np.mean(pressures),
+                    "wspd": np.mean(wind_speeds),
+                    "prcp": total_prcp,
+                    "description": most_common_desc,
+                    "icon": day_forecasts[0]["weather"][0]["icon"],
+                    "forecast_count": len(day_forecasts)
+                }, f"OpenWeatherMap Forecast ({len(day_forecasts)} readings)"
+            else:
+                # Date is beyond 5-day forecast range
+                return None, "Date beyond 5-day forecast range"
+        else:
+            return generate_demo_weather_for_date(target_date), f"API Error ({response.status_code}) - Using Demo"
+            
+    except Exception as e:
+        return generate_demo_weather_for_date(target_date), f"API Error: {str(e)[:50]} - Using Demo"
+
+
+def generate_demo_weather_for_date(target_date):
+    """Generate realistic demo weather data for a specific date"""
+    month = target_date.month
+    
+    # Seasonal variations for KP Pakistan
+    if month in [6, 7, 8]:  # Monsoon - HIGH RISK
+        temp_base, prcp_base, humidity_base = 28, 25, 75
+    elif month in [9]:  # Post monsoon
+        temp_base, prcp_base, humidity_base = 24, 15, 65
+    elif month in [12, 1, 2]:  # Winter
+        temp_base, prcp_base, humidity_base = 5, 5, 50
+    elif month in [3, 4, 5]:  # Spring
+        temp_base, prcp_base, humidity_base = 18, 8, 55
+    else:  # Fall
+        temp_base, prcp_base, humidity_base = 20, 10, 60
+    
+    # Add some randomness
+    np.random.seed(target_date.toordinal())  # Consistent for same date
+    
+    return {
+        "tavg": temp_base + np.random.uniform(-3, 3),
+        "tmin": temp_base - 5 + np.random.uniform(-2, 2),
+        "tmax": temp_base + 5 + np.random.uniform(-2, 2),
+        "humidity": humidity_base + np.random.uniform(-10, 15),
+        "pres": 1010 + np.random.uniform(-15, 15),
+        "wspd": 10 + np.random.uniform(-5, 15),
+        "prcp": prcp_base + np.random.uniform(0, 20),
+        "description": "Demo forecast - simulated data",
+        "icon": "03d"
+    }
+
+
 def generate_demo_weather():
     """Generate realistic demo weather data"""
     month = datetime.now().month
@@ -494,16 +589,41 @@ def show_model_info(model_data):
 def show_custom_prediction(location, model_data):
     """Allow users to enter custom weather features for prediction"""
     st.title("🔮 Custom Flood Prediction")
-    st.markdown("Select a date to auto-fetch historical weather, or enter custom values.")
+    st.markdown("Select a date to predict flood risk. **Tomorrow's forecast** is auto-fetched from weather API!")
+    
+    st.markdown("---")
+    
+    # Get today and tomorrow dates
+    today = datetime.now().date()
+    tomorrow = today + timedelta(days=1)
+    
+    # Quick date selection buttons
+    st.markdown("### ⚡ Quick Date Selection")
+    col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
+    
+    with col_btn1:
+        if st.button("📅 Today", use_container_width=True):
+            st.session_state['selected_date'] = today
+    with col_btn2:
+        if st.button("🔮 Tomorrow", use_container_width=True, type="primary"):
+            st.session_state['selected_date'] = tomorrow
+    with col_btn3:
+        if st.button("📆 Day After", use_container_width=True):
+            st.session_state['selected_date'] = today + timedelta(days=2)
+    with col_btn4:
+        if st.button("📅 In 3 Days", use_container_width=True):
+            st.session_state['selected_date'] = today + timedelta(days=3)
     
     st.markdown("---")
     
     # Date and location selection
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
+        # Use session state if set, otherwise default to today
+        default_date = st.session_state.get('selected_date', today)
         selected_date = st.date_input(
             "📅 Select Date",
-            value=datetime.now(),
+            value=default_date,
             min_value=datetime(2000, 1, 1),
             max_value=datetime(2030, 12, 31)
         )
@@ -514,46 +634,122 @@ def show_custom_prediction(location, model_data):
             index=0 if "swat" in location['name'].lower() else 1
         )
     with col3:
-        auto_fetch = st.checkbox("Auto-fetch", value=True, help="Automatically load weather from historical data")
+        auto_fetch = st.checkbox("Auto-fetch", value=True, help="Automatically load weather data")
+    
+    # Determine if date is future or past
+    is_future_date = selected_date > today
+    is_within_forecast = selected_date <= today + timedelta(days=5)
+    
+    # Get location coordinates
+    loc_key = "swat" if "swat" in selected_loc.lower() else "upper_dir"
+    loc_info = LOCATIONS[loc_key]
     
     # Default values
     tavg, tmin, tmax, prcp, humidity, pres, wspd, solar = 20.0, 15.0, 25.0, 5.0, 60.0, 1010.0, 10.0, 18.0
     weather_source = "Manual Input"
     actual_flood = None
+    forecast_info = None
     
-    # Auto-fetch weather data from historical dataset
+    # Auto-fetch weather data
     if auto_fetch:
-        data_path = DATA_DIR / "flood_weather_dataset.csv"
-        if data_path.exists():
-            df = pd.read_csv(data_path, low_memory=False)
-            df['date'] = pd.to_datetime(df['date'])
+        if is_future_date and is_within_forecast:
+            # FUTURE DATE: Fetch weather forecast from API
+            st.info(f"🔮 **Future Date Selected** - Fetching weather forecast for {selected_date}...")
             
-            # Filter by date and location
-            loc_key = "swat" if "swat" in selected_loc.lower() else "upper_dir"
-            matches = df[(df['date'].dt.date == selected_date) & (df['location_key'].str.contains(loc_key, case=False, na=False))]
+            forecast_data, source_msg = fetch_weather_forecast(
+                loc_info['latitude'],
+                loc_info['longitude'],
+                OPENWEATHER_API_KEY,
+                datetime.combine(selected_date, datetime.min.time())
+            )
             
-            if len(matches) > 0:
-                row = matches.iloc[0]
-                tavg = float(row['tavg']) if pd.notna(row['tavg']) else tavg
-                tmin = float(row['tmin']) if pd.notna(row['tmin']) else tmin
-                tmax = float(row['tmax']) if pd.notna(row['tmax']) else tmax
-                prcp = float(row['prcp']) if pd.notna(row['prcp']) else prcp
-                humidity = float(row['humidity']) if pd.notna(row['humidity']) else humidity
-                pres = float(row['pres']) if pd.notna(row['pres']) else pres
-                wspd = float(row['wspd']) if pd.notna(row['wspd']) else wspd
-                solar = float(row['solar_radiation']) if pd.notna(row['solar_radiation']) else solar
-                actual_flood = int(row['flood_event']) if pd.notna(row['flood_event']) else None
-                weather_source = f"Historical Data ({selected_date})"
+            if forecast_data:
+                tavg = float(forecast_data.get('tavg', tavg))
+                tmin = float(forecast_data.get('tmin', tmin))
+                tmax = float(forecast_data.get('tmax', tmax))
+                prcp = float(forecast_data.get('prcp', prcp))
+                humidity = float(forecast_data.get('humidity', humidity))
+                pres = float(forecast_data.get('pres', pres))
+                wspd = float(forecast_data.get('wspd', wspd))
+                weather_source = source_msg
+                forecast_info = forecast_data.get('description', '')
                 
-                st.success(f"✅ Weather data loaded for {selected_date} at {selected_loc}")
-                if actual_flood == 1:
-                    st.error("🌊 **Note: This date had an actual flood event!**")
+                if selected_date == tomorrow:
+                    st.success(f"✅ **Tomorrow's Forecast Loaded!** Weather: {forecast_info}")
+                else:
+                    st.success(f"✅ Forecast loaded for {selected_date}. Weather: {forecast_info}")
             else:
-                st.warning(f"⚠️ No historical data for {selected_date}. Using default values or enter manually.")
-                weather_source = "Default Values (no data)"
+                st.warning(f"⚠️ {source_msg}. Using estimated values based on historical patterns.")
+                weather_source = "Estimated (No Forecast)"
+                
+        elif is_future_date and not is_within_forecast:
+            # Date too far in future - use seasonal estimates
+            st.warning(f"⚠️ {selected_date} is beyond 5-day forecast. Using seasonal estimates.")
+            demo_data = generate_demo_weather_for_date(datetime.combine(selected_date, datetime.min.time()))
+            tavg = demo_data['tavg']
+            tmin = demo_data['tmin']
+            tmax = demo_data['tmax']
+            prcp = demo_data['prcp']
+            humidity = demo_data['humidity']
+            pres = demo_data['pres']
+            wspd = demo_data['wspd']
+            weather_source = f"Seasonal Estimate for {selected_date.strftime('%B')}"
+            
+        else:
+            # PAST/TODAY: Load from historical data
+            data_path = DATA_DIR / "flood_weather_dataset.csv"
+            if data_path.exists():
+                df = pd.read_csv(data_path, low_memory=False)
+                df['date'] = pd.to_datetime(df['date'])
+                
+                # Filter by date and location
+                matches = df[(df['date'].dt.date == selected_date) & (df['location_key'].str.contains(loc_key, case=False, na=False))]
+                
+                if len(matches) > 0:
+                    row = matches.iloc[0]
+                    tavg = float(row['tavg']) if pd.notna(row['tavg']) else tavg
+                    tmin = float(row['tmin']) if pd.notna(row['tmin']) else tmin
+                    tmax = float(row['tmax']) if pd.notna(row['tmax']) else tmax
+                    prcp = float(row['prcp']) if pd.notna(row['prcp']) else prcp
+                    humidity = float(row['humidity']) if pd.notna(row['humidity']) else humidity
+                    pres = float(row['pres']) if pd.notna(row['pres']) else pres
+                    wspd = float(row['wspd']) if pd.notna(row['wspd']) else wspd
+                    solar = float(row['solar_radiation']) if pd.notna(row['solar_radiation']) else solar
+                    actual_flood = int(row['flood_event']) if pd.notna(row['flood_event']) else None
+                    weather_source = f"Historical Data ({selected_date})"
+                    
+                    st.success(f"✅ Historical weather loaded for {selected_date}")
+                    if actual_flood == 1:
+                        st.error("🌊 **Note: This date had an actual flood event!**")
+                elif selected_date == today:
+                    # Today - fetch current weather
+                    current_weather = fetch_weather_data(
+                        loc_info['latitude'],
+                        loc_info['longitude'],
+                        OPENWEATHER_API_KEY
+                    )
+                    tavg = current_weather['tavg']
+                    tmin = current_weather['tmin']
+                    tmax = current_weather['tmax']
+                    prcp = current_weather['prcp']
+                    humidity = current_weather['humidity']
+                    pres = current_weather['pres']
+                    wspd = current_weather['wspd']
+                    weather_source = "Current Weather (Live)"
+                    st.success("✅ Today's live weather data loaded!")
+                else:
+                    st.warning(f"⚠️ No historical data for {selected_date}. Enter values manually.")
+                    weather_source = "Default Values (no data)"
     
-    st.markdown("### 🌡️ Weather Parameters")
-    st.caption(f"Source: {weather_source}")
+    # Display date type indicator
+    if is_future_date:
+        st.markdown(f"### 🔮 **FORECAST MODE** - Predicting for {selected_date}")
+        if selected_date == tomorrow:
+            st.markdown("#### 🌅 Tomorrow's Flood Risk Prediction")
+    else:
+        st.markdown(f"### 📊 Weather Parameters for {selected_date}")
+    
+    st.caption(f"📡 Source: {weather_source}")
     
     # Weather inputs in columns (editable even when auto-fetched)
     col1, col2, col3 = st.columns(3)
@@ -574,8 +770,10 @@ def show_custom_prediction(location, model_data):
     
     st.markdown("---")
     
-    # Predict button
-    if st.button("🔮 Predict Flood Risk", type="primary", use_container_width=True):
+    # Predict button - different text for future dates
+    button_text = "🔮 Predict Tomorrow's Flood Risk" if selected_date == tomorrow else "🔮 Predict Flood Risk"
+    
+    if st.button(button_text, type="primary", use_container_width=True):
         # Prepare features
         location_id = 0 if "swat" in selected_loc.lower() else 1
         
@@ -660,6 +858,49 @@ def show_custom_prediction(location, model_data):
                     st.error("❌ Missed! Flood occurred but model predicted low risk.")
                 else:
                     st.warning("⚠️ False alarm. Model predicted risk but no flood occurred.")
+        
+        # Special message for tomorrow's prediction
+        if selected_date == tomorrow:
+            st.markdown("---")
+            st.markdown("### 🌅 Tomorrow's Forecast Summary")
+            if risk_level == "HIGH":
+                st.error(f"""
+                ⚠️ **HIGH FLOOD RISK TOMORROW ({tomorrow})**
+                
+                Based on weather forecast:
+                - Expected precipitation: **{prcp:.1f} mm**
+                - Temperature: **{tavg:.1f}°C**
+                - Humidity: **{humidity:.0f}%**
+                
+                **RECOMMENDED ACTIONS:**
+                - Monitor official alerts closely
+                - Prepare emergency supplies
+                - Know your evacuation routes
+                - Stay away from rivers and streams
+                """)
+            elif risk_level == "MODERATE":
+                st.warning(f"""
+                ⚡ **MODERATE FLOOD RISK TOMORROW ({tomorrow})**
+                
+                Based on weather forecast:
+                - Expected precipitation: **{prcp:.1f} mm**
+                - Temperature: **{tavg:.1f}°C**
+                
+                **RECOMMENDED ACTIONS:**
+                - Stay alert to weather updates
+                - Review emergency plans
+                - Secure outdoor items
+                """)
+            else:
+                st.success(f"""
+                ✅ **LOW FLOOD RISK TOMORROW ({tomorrow})**
+                
+                Weather forecast shows normal conditions:
+                - Expected precipitation: **{prcp:.1f} mm**
+                - Temperature: **{tavg:.1f}°C**
+                
+                No special precautions needed, but stay informed.
+                """)
         
         # Show input summary
         with st.expander("📋 Input Summary"):

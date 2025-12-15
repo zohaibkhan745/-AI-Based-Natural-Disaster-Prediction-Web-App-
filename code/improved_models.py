@@ -227,8 +227,8 @@ class ImprovedFloodModels:
         print(f"\n🏆 Best Model: {best_name} (Recall: {best_result['recall']:.4f}, F1: {best_result['f1']:.4f})")
         return best_name, best_result
     
-    def save_best_model(self, filename='best_flood_model.pkl'):
-        """Save the best model to disk"""
+    def save_best_model(self, filename='best_flood_model.pkl', scaler=None):
+        """Save the best model to disk with scaler"""
         best_name, best_result = self.get_best_model()
         
         model_data = {
@@ -236,6 +236,7 @@ class ImprovedFloodModels:
             'model_name': best_name,
             'threshold': best_result['threshold'],
             'feature_names': self.feature_names,
+            'scaler': scaler,  # CRITICAL: Save the scaler for prediction!
             'metrics': {
                 'accuracy': best_result['accuracy'],
                 'precision': best_result['precision'],
@@ -250,6 +251,7 @@ class ImprovedFloodModels:
             pickle.dump(model_data, f)
         
         print(f"💾 Best model saved to: {filepath}")
+        print(f"   ✅ Scaler included: {scaler is not None}")
         return filepath
     
     def save_all_results(self):
@@ -279,12 +281,12 @@ class ImprovedFloodModels:
         print(f"📊 Results saved to {RESULTS_DIR}")
 
 
-def run_improved_training(X_train, X_test, y_train, y_test, feature_names):
+def run_improved_training(X_train, X_test, y_train, y_test, feature_names, scaler=None):
     """Run the complete improved training pipeline."""
     trainer = ImprovedFloodModels(X_train, X_test, y_train, y_test, feature_names)
     trainer.train_all()
     trainer.evaluate_all()
-    trainer.save_best_model()
+    trainer.save_best_model(scaler=scaler)  # Pass scaler to save
     trainer.save_all_results()
     return trainer
 

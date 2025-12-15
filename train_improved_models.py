@@ -40,11 +40,12 @@ def main():
     
     print(f"\n📊 Training: {len(y_train)} | Test: {len(y_test)} | Features: {len(preprocessor.feature_names)}")
     
-    # Train improved models
+    # Train improved models - PASS SCALER for saving!
     trainer = run_improved_training(
         X_train_scaled, X_test_scaled, 
         y_train.values, y_test.values, 
-        preprocessor.feature_names
+        preprocessor.feature_names,
+        scaler=preprocessor.scaler  # CRITICAL: Pass scaler to save!
     )
     
     # Summary
